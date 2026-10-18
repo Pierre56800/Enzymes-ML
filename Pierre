@@ -1,4 +1,5 @@
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 
 chemin_fichier = "Dataset_Start&Go_UniversalAssay.xlsm"
 
@@ -7,11 +8,11 @@ try:
     nom_feuille = "Tree_Sigma_Full"
     df_raw = pd.read_excel(chemin_fichier, sheet_name=nom_feuille, header=None)
 
-    # Substrats (ligne 8) et métadonnées enzymes (ligne 16)
+    # Substrats (ligne 8) et métadonnées enzymes (ligne 16)[cite: 4]
     noms_substrats = df_raw.iloc[7, 13:].values
-    noms_enzymes_meta = df_raw.iloc[15, 7:13].values
+    noms_enzymes_meta = [str(col).strip() for col in df_raw.iloc[15, 7:13].values]
 
-    # Découpage strict de la ligne 18 à la ligne 482
+    # Découpage strict de la ligne 18 à la ligne 482[cite: 4, 5]
     row_debut = 17
     row_fin = 482
 
@@ -31,31 +32,67 @@ try:
     cols_meta = list(noms_enzymes_meta)
     df_ml = pd.melt(df_grid, id_vars=cols_meta, var_name='Substrat', value_name='Activite')
 
-    # 3. VERIFICATION : Isoler explicitement les lignes à prédire (contenant '???')
-    # On repère si l'activité contient '?' ou si c'est la ligne de l'enzyme Q5N2G0
-    mask_a_predire = df_ml['Activite'].astype(str).str.contains('\?', na=False) | (df_ml['Acc. Number'] == 'Q5N2G0')
+    # 3. VERIFICATION : Isoler explicitement les lignes à prédire (contenant '???')[cite: 6]
+    mask_a_predire = df_ml['Activite'].astype(str).str.contains(r'\?', na=False) | (df_ml['Acc. Number'] == 'Q5N2G0')
 
     df_a_predire = df_ml[mask_a_predire].copy()
     df_connues = df_ml[~mask_a_predire].copy()
 
-    # Pour le jeu d'entraînement, on convertit l'activité en nombre et on enlève les éventuels vrais NaN
+    # Pour le jeu d'entraînement, on convertit l'activité en nombre et on enlève les NaN
     df_connues['Activite'] = pd.to_numeric(df_connues['Activite'], errors='coerce')
     df_connues = df_connues.dropna(subset=['Activite'])
 
     print(f"Lignes d'apprentissage disponibles (données mesurées) : {len(df_connues)}")
     print(f"Lignes à prédire pour la ligne 111 (Q5N2G0) : {len(df_a_predire)}")
 
-    print("\n--- Aperçu des données '???' bien conservées pour la ligne 111 ---")
-    print(df_a_predire[['Acc. Number', 'Substrat', 'Activite']].head(10))
-
-    # Savegarder deux fichiers distincts : un pour entraîner, un à prédire
+    # Sauvegarder deux fichiers distincts
     df_connues.to_csv("dataset_train.csv", index=False)
     df_a_predire.to_csv("dataset_a_predire.csv", index=False)
-    print("\nDeux fichiers créés : 'dataset_train.csv' (données mesurées) et 'dataset_a_predire.csv' (pour l'enzyme Q5N2G0).")
+    print("\nDeux fichiers créés : 'dataset_train.csv' et 'dataset_a_predire.csv'.")
 
 except Exception as e:
-    print(f"Erreur : {e}")
-# on a ici préparé deux fichiers que nous allons utiliser pour la suite du machine learning
-# un fichier avec les donnés d'apprentissage disponible et un autre avec les ligne ou l'activité et à prédirepip install scikit-learn xgboost
+    print(f"Erreur lors de l'extraction : {e}")
 
-#Étape 1 : Le modèle le plus simple — La Régression Linéaire
+
+# ==========================================
+# Étape 1 : Régression Linéaire en 2D
+# ==========================================
+
+# 1. Charger les données
+df_train = pd.read_csv("dataset_train.csv")
+df_pred = pd.read_csv("dataset_a_predire.csv")
+
+# Nettoyage automatique des noms de colonnes (suppression des espaces)
+df_train.columns = df_train.columns.str.strip()
+df_pred.columns = df_pred.columns.str.strip()
+
+# Recherche dynamique de la colonne Bradford (insensible à la casse)
+col_bradford_train = next((c for c in df_train.columns if 'bradford' in c.lower()), None)
+col_bradford_pred = next((c for c in df_pred.columns if 'bradford' in c.lower()), None)
+
+if not col_bradford_train:
+    raise ValueError(f"Impossible de trouver la colonne Bradford dans dataset_train. Colonnes dispo : {df_train.columns.tolist()}")
+
+# Conversion propre en nombre
+df_train[col_bradford_train] = pd.to_numeric(df_train[col_bradford_train], errors='coerce')
+df_pred[col_bradford_pred] = pd.to_numeric(df_pred[col_bradford_pred], errors='coerce')
+
+# 2. Choisir UNE seule variable d'entrée (X) : Le Bradford
+X_train = df_train[[col_bradford_train]].fillna(0)
+y_train = df_train['Activite']
+X_pred = df_pred[[col_bradford_pred]].fillna(0)
+
+# 3. Créer et entraîner le modèle
+modele = LinearRegression()
+modele.fit(X_train, y_train)
+
+# 4. Prédire
+df_pred['Activite_Predite_2D'] = modele.predict(X_pred)
+
+# 5. Afficher le résultat
+print("\n--- Résultats de la régression linéaire 2D (basée uniquement sur le Bradford) ---")
+print(df_pred[['Acc. Number', 'Substrat', col_bradford_pred, 'Activite_Predite_2D']].head(10))
+
+# Sauvegarde finale des prédictions
+df_pred.to_csv("resultat_regression_2d.csv", index=False)
+print("\nRésultats enregistrés dans 'resultat_regression_2d.csv' !")
