@@ -1,1 +1,61 @@
+import pandas as pd
 
+chemin_fichier = "Dataset_Start&Go_UniversalAssay.xlsm"
+
+try:
+    # 1. Charger la feuille 'Tree_Sigma_Full'
+    nom_feuille = "Tree_Sigma_Full"
+    df_raw = pd.read_excel(chemin_fichier, sheet_name=nom_feuille, header=None)
+
+    # Substrats (ligne 8) et métadonnées enzymes (ligne 16)
+    noms_substrats = df_raw.iloc[7, 13:].values
+    noms_enzymes_meta = df_raw.iloc[15, 7:13].values
+
+    # Découpage strict de la ligne 18 à la ligne 482
+    row_debut = 17
+    row_fin = 482
+
+    df_enzymes = df_raw.iloc[row_debut:row_fin, 7:13].copy()
+    df_enzymes.columns = noms_enzymes_meta
+
+    df_activite = df_raw.iloc[row_debut:row_fin, 13:].copy()
+    df_activite.columns = noms_substrats
+
+    # Assemblage de la grille
+    df_grid = pd.concat([df_enzymes.reset_index(drop=True), df_activite.reset_index(drop=True)], axis=1)
+
+    # Garder uniquement les lignes valides (avec un Acc. Number)
+    df_grid = df_grid.dropna(subset=['Acc. Number'])
+
+    # 2. Transformation au format LONG
+    cols_meta = list(noms_enzymes_meta)
+    df_ml = pd.melt(df_grid, id_vars=cols_meta, var_name='Substrat', value_name='Activite')
+
+    # 3. VERIFICATION : Isoler explicitement les lignes à prédire (contenant '???')
+    # On repère si l'activité contient '?' ou si c'est la ligne de l'enzyme Q5N2G0
+    mask_a_predire = df_ml['Activite'].astype(str).str.contains('\?', na=False) | (df_ml['Acc. Number'] == 'Q5N2G0')
+
+    df_a_predire = df_ml[mask_a_predire].copy()
+    df_connues = df_ml[~mask_a_predire].copy()
+
+    # Pour le jeu d'entraînement, on convertit l'activité en nombre et on enlève les éventuels vrais NaN
+    df_connues['Activite'] = pd.to_numeric(df_connues['Activite'], errors='coerce')
+    df_connues = df_connues.dropna(subset=['Activite'])
+
+    print(f"Lignes d'apprentissage disponibles (données mesurées) : {len(df_connues)}")
+    print(f"Lignes à prédire pour la ligne 111 (Q5N2G0) : {len(df_a_predire)}")
+
+    print("\n--- Aperçu des données '???' bien conservées pour la ligne 111 ---")
+    print(df_a_predire[['Acc. Number', 'Substrat', 'Activite']].head(10))
+
+    # Savegarder deux fichiers distincts : un pour entraîner, un à prédire
+    df_connues.to_csv("dataset_train.csv", index=False)
+    df_a_predire.to_csv("dataset_a_predire.csv", index=False)
+    print("\nDeux fichiers créés : 'dataset_train.csv' (données mesurées) et 'dataset_a_predire.csv' (pour l'enzyme Q5N2G0).")
+
+except Exception as e:
+    print(f"Erreur : {e}")
+# on a ici préparé deux fichiers que nous allons utiliser pour la suite du machine learning
+# un fichier avec les donnés d'apprentissage disponible et un autre avec les ligne ou l'activité et à prédirepip install scikit-learn xgboost
+
+#Étape 1 : Le modèle le plus simple — La Régression Linéaire
