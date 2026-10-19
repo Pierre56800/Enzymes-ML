@@ -8,11 +8,11 @@ try:
     nom_feuille = "Tree_Sigma_Full"
     df_raw = pd.read_excel(chemin_fichier, sheet_name=nom_feuille, header=None)
 
-    # Substrats (ligne 8) et métadonnées enzymes (ligne 16)[cite: 4]
+    # Substrats (ligne 8) et métadonnées enzymes (ligne 16)
     noms_substrats = df_raw.iloc[7, 13:].values
     noms_enzymes_meta = [str(col).strip() for col in df_raw.iloc[15, 7:13].values]
 
-    # Découpage strict de la ligne 18 à la ligne 482[cite: 4, 5]
+    # Découpage strict de la ligne 18 à la ligne 482
     row_debut = 17
     row_fin = 482
 
@@ -32,7 +32,7 @@ try:
     cols_meta = list(noms_enzymes_meta)
     df_ml = pd.melt(df_grid, id_vars=cols_meta, var_name='Substrat', value_name='Activite')
 
-    # 3. VERIFICATION : Isoler explicitement les lignes à prédire (contenant '???')[cite: 6]
+    # 3. VERIFICATION : Isoler explicitement les lignes à prédire (contenant '???')
     mask_a_predire = df_ml['Activite'].astype(str).str.contains(r'\?', na=False) | (df_ml['Acc. Number'] == 'Q5N2G0')
 
     df_a_predire = df_ml[mask_a_predire].copy()
@@ -54,9 +54,9 @@ except Exception as e:
     print(f"Erreur lors de l'extraction : {e}")
 
 
-# ==========================================
-# Étape 1 : Régression Linéaire en 2D
-# ==========================================
+# ==========================================================
+# Étape : Régression Multiple (Bradford + Substrats)
+# ==========================================================
 
 # 1. Charger les données
 df_train = pd.read_csv("dataset_train.csv")
@@ -66,33 +66,39 @@ df_pred = pd.read_csv("dataset_a_predire.csv")
 df_train.columns = df_train.columns.str.strip()
 df_pred.columns = df_pred.columns.str.strip()
 
-# Recherche dynamique de la colonne Bradford (insensible à la casse)
+# Recherche dynamique de la colonne Bradford
 col_bradford_train = next((c for c in df_train.columns if 'bradford' in c.lower()), None)
 col_bradford_pred = next((c for c in df_pred.columns if 'bradford' in c.lower()), None)
 
 if not col_bradford_train:
     raise ValueError(f"Impossible de trouver la colonne Bradford dans dataset_train. Colonnes dispo : {df_train.columns.tolist()}")
 
-# Conversion propre en nombre
-df_train[col_bradford_train] = pd.to_numeric(df_train[col_bradford_train], errors='coerce')
-df_pred[col_bradford_pred] = pd.to_numeric(df_pred[col_bradford_pred], errors='coerce')
+# Conversion propre du Bradford en nombre
+df_train[col_bradford_train] = pd.to_numeric(df_train[col_bradford_train], errors='coerce').fillna(0)
+df_pred[col_bradford_pred] = pd.to_numeric(df_pred[col_bradford_pred], errors='coerce').fillna(0)
 
-# 2. Choisir UNE seule variable d'entrée (X) : Le Bradford
-X_train = df_train[[col_bradford_train]].fillna(0)
+# 2. Encodage des Substrats (One-Hot Encoding)
+# Combine temporairement pour s'assurer d'avoir les mêmes colonnes de substrats
+df_all = pd.concat([df_train[[col_bradford_train, 'Substrat']], df_pred[[col_bradford_pred, 'Substrat']]], axis=0)
+df_all_encoded = pd.get_dummies(df_all, columns=['Substrat'], drop_first=False)
+
+# Séparation après encodage
+X_train = df_all_encoded.iloc[:len(df_train)].copy()
+X_pred = df_all_encoded.iloc[len(df_train):].copy()
+
 y_train = df_train['Activite']
-X_pred = df_pred[[col_bradford_pred]].fillna(0)
 
-# 3. Créer et entraîner le modèle
+# 3. Créer et entraîner le modèle (Régression Linéaire Multiple)
 modele = LinearRegression()
 modele.fit(X_train, y_train)
 
-# 4. Prédire
-df_pred['Activite_Predite_2D'] = modele.predict(X_pred)
+# 4. Prédire pour la ligne 111
+df_pred['Activite_Predite'] = modele.predict(X_pred)
 
 # 5. Afficher le résultat
-print("\n--- Résultats de la régression linéaire 2D (basée uniquement sur le Bradford) ---")
-print(df_pred[['Acc. Number', 'Substrat', col_bradford_pred, 'Activite_Predite_2D']].head(10))
+print("\n--- Résultats de la régression (basée sur le Bradford ET le Substrat) ---")
+print(df_pred[['Acc. Number', 'Substrat', col_bradford_pred, 'Activite_Predite']].head(15))
 
 # Sauvegarde finale des prédictions
-df_pred.to_csv("resultat_regression_2d.csv", index=False)
-print("\nRésultats enregistrés dans 'resultat_regression_2d.csv' !")
+df_pred.to_csv("resultat_regression_bradford_substrat.csv", index=False)
+print("\nRésultats enregistrés dans 'resultat_regression_bradford_substrat.csv' !")
